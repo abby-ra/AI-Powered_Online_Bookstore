@@ -3,88 +3,196 @@ import os
 from typing import List, Optional, Dict, Any
 from models.book import Book, BookCollection
 from models.user import User, UserRepository
+from models.rating import BookRating, RatingRepository
 from utils.text_processing import text_processor
 from utils.ml_utils import ml_engine
 import json
 import random
+import numpy as np
 
 class DataManager:
     """Centralized data management for the bookstore application"""
     
-    def __init__(self, data_path: str = "data/books.csv"):
-        self.data_path = data_path
+    def __init__(self, 
+                 books_path: str = "data/books.csv",
+                 ratings_path: str = "data/ratings.csv", 
+                 users_path: str = "data/users.csv"):
+        self.books_path = books_path
+        self.ratings_path = ratings_path
+        self.users_path = users_path
         self.book_collection: Optional[BookCollection] = None
         self.user_repository = UserRepository()
+        self.rating_repository = RatingRepository()
         self._initialize_data()
     
     def _initialize_data(self):
-        """Initialize the data by loading books and setting up ML models"""
+        """Initialize the data by loading all CSV files and setting up ML models"""
+        print("Loading dataset...")
         self._load_books()
+        self._load_users()
+        self._load_ratings()
         self._setup_ml_engine()
-        self._create_sample_users()
+        print("Data initialization complete!")
     
     def _load_books(self):
         """Load books from CSV file"""
         try:
-            if not os.path.exists(self.data_path):
-                raise FileNotFoundError(f"Data file not found: {self.data_path}")
+            if not os.path.exists(self.books_path):
+                raise FileNotFoundError(f"Books data file not found: {self.books_path}")
             
+            print(f"Loading books from {self.books_path}...")
             # Read CSV with proper encoding and error handling
             df = pd.read_csv(
-                self.data_path, 
+                self.books_path, 
                 sep=';', 
                 encoding='latin-1', 
-                on_bad_lines='skip'
+                on_bad_lines='skip',
+                dtype=str  # Read all as strings initially
             )
             
-            # Rename columns to match our model
-            df.columns = ['isbn', 'title', 'author', 'year', 'publisher', 'image_url']
+            print(f"Loaded {len(df)} book records")
             
             # Clean and validate data
             df = self._clean_book_data(df)
             
-            # Convert to Book objects
+            # Convert to Book objects (sample first 10000 for performance)
+            sample_size = min(10000, len(df))
+            df_sample = df.sample(n=sample_size, random_state=42) if len(df) > sample_size else df
+            
             books = []
-            for _, row in df.iterrows():
+            failed_count = 0
+            
+            for _, row in df_sample.iterrows():
                 try:
                     book = Book.from_pandas_row(row)
-                    # Add some mock genres and ratings for demonstration
+                    # Add genre and description
                     book.genre = self._assign_genre(book.title, book.author)
-                    book.rating = round(random.uniform(3.0, 5.0), 1)
                     book.description = self._generate_description(book.title, book.author, book.genre)
                     books.append(book)
                 except Exception as e:
-                    print(f"Error creating book from row {row.get('title', 'Unknown')}: {e}")
+                    failed_count += 1
                     continue
             
             self.book_collection = BookCollection(books)
-            print(f"Loaded {len(books)} books successfully")
+            print(f"Successfully loaded {len(books)} books ({failed_count} failed)")
             
         except Exception as e:
             print(f"Error loading books: {e}")
             # Create a fallback with some sample books
             self._create_fallback_books()
     
+    def _load_users(self):
+        """Load users from CSV file"""
+        try:
+            if not os.path.exists(self.users_path):
+                print(f"Users data file not found: {self.users_path}, skipping user loading")
+                return
+            
+            print(f"Loading users from {self.users_path}...")
+            df = pd.read_csv(
+                self.users_path,
+                sep=';',
+                encoding='latin-1',
+                on_bad_lines='skip',
+                dtype={'User-ID': str, 'Location': str, 'Age': str}
+            )
+            
+            print(f"Loaded {len(df)} user records")
+            
+            # Sample users for performance (take first 1000)
+            sample_size = min(1000, len(df))
+            df_sample = df.head(sample_size)
+            
+            users_loaded = 0
+            for _, row in df_sample.iterrows():
+                try:
+                    user = User.from_pandas_row(row)
+                    self.user_repository.users[user.user_id] = user
+                    users_loaded += 1
+                except Exception as e:
+                    continue
+            
+            print(f"Successfully loaded {users_loaded} users")
+            
+        except Exception as e:
+            print(f"Error loading users: {e}")
+    
+    def _load_ratings(self):
+        """Load ratings from CSV file"""
+        try:
+            if not os.path.exists(self.ratings_path):
+                print(f"Ratings data file not found: {self.ratings_path}, skipping ratings loading")
+                return
+            
+            print(f"Loading ratings from {self.ratings_path}...")
+            
+            # Load ratings in chunks to manage memory
+            chunk_size = 50000
+            total_loaded = 0
+            
+            for chunk in pd.read_csv(
+                self.ratings_path,
+                sep=';',
+                encoding='latin-1',
+                on_bad_lines='skip',
+                dtype={'User-ID': str, 'ISBN': str, 'Book-Rating': str},
+                chunksize=chunk_size
+            ):
+                self.rating_repository.load_ratings_from_dataframe(chunk)
+                total_loaded += len(chunk)
+                
+                # Limit total ratings for performance (100K ratings)
+                if total_loaded >= 100000:
+                    break
+            
+            # Update book ratings in book collection
+            self._update_book_ratings()
+            
+            print(f"Ratings loading complete. Statistics:")
+            stats = self.rating_repository.get_statistics()
+            for key, value in stats.items():
+                print(f"  {key}: {value}")
+            
+        except Exception as e:
+            print(f"Error loading ratings: {e}")
+    
+    def _update_book_ratings(self):
+        """Update book objects with rating information"""
+        if not self.book_collection:
+            return
+        
+        for book in self.book_collection.books:
+            avg_rating = self.rating_repository.get_book_average_rating(book.isbn)
+            if avg_rating is not None:
+                book.rating = round(avg_rating, 1)
+    
     def _clean_book_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """Clean and validate book data"""
+        # Make a copy to avoid SettingWithCopyWarning
+        df = df.copy()
+        
         # Remove rows with missing essential data
-        df = df.dropna(subset=['title', 'author'])
+        df = df.dropna(subset=['Book-Title', 'Book-Author'])
         
         # Clean year column
-        df['year'] = pd.to_numeric(df['year'], errors='coerce')
-        df['year'] = df['year'].fillna(2000).astype(int)
+        df['Year-Of-Publication'] = pd.to_numeric(df['Year-Of-Publication'], errors='coerce')
+        df['Year-Of-Publication'] = df['Year-Of-Publication'].fillna(2000).astype(int)
         
         # Ensure year is reasonable
-        df['year'] = df['year'].apply(lambda x: max(1800, min(2024, x)))
+        df['Year-Of-Publication'] = df['Year-Of-Publication'].apply(lambda x: max(1500, min(2024, x)))
         
         # Fill missing publishers
-        df['publisher'] = df['publisher'].fillna('Unknown Publisher')
+        df['Publisher'] = df['Publisher'].fillna('Unknown Publisher')
         
         # Clean ISBN
-        df['isbn'] = df['isbn'].astype(str).str.replace('-', '').str.replace(' ', '')
+        df['ISBN'] = df['ISBN'].astype(str).str.replace('-', '').str.replace(' ', '')
         
-        # Ensure image URLs are strings
-        df['image_url'] = df['image_url'].fillna('').astype(str)
+        # Ensure image URLs are strings and not null
+        for col in ['Image-URL-S', 'Image-URL-M', 'Image-URL-L']:
+            df[col] = df[col].fillna('').astype(str)
+        
+        # Remove duplicates based on ISBN
+        df = df.drop_duplicates(subset=['ISBN'], keep='first')
         
         return df
     
@@ -130,28 +238,95 @@ class DataManager:
     
     def _setup_ml_engine(self):
         """Set up and train the ML recommendation engine"""
-        if self.book_collection:
+        if self.book_collection and len(self.book_collection.books) > 0:
             try:
-                ml_engine.fit(self.book_collection)
+                # Use the enhanced fitting method with ratings if available
+                if len(self.rating_repository.ratings) > 0:
+                    ml_engine.fit_with_ratings(self.book_collection, self.rating_repository)
+                else:
+                    # Fallback to original method if no ratings
+                    ml_engine.fit(self.book_collection)
                 print("ML recommendation engine initialized successfully")
             except Exception as e:
                 print(f"Error setting up ML engine: {e}")
+                import traceback
+                traceback.print_exc()
     
     def _create_sample_users(self):
-        """Create some sample users for testing"""
+        """Create some sample users for testing (if no real users loaded)"""
+        if len(self.user_repository.users) > 0:
+            return  # Real users already loaded
+        
         sample_users = [
             {"username": "bookworm_alice", "email": "alice@example.com"},
             {"username": "reader_bob", "email": "bob@example.com"},
             {"username": "literary_carol", "email": "carol@example.com"}
         ]
         
-        for user_data in sample_users:
-            user = self.user_repository.create_user(
-                user_data["username"], 
-                user_data["email"]
+        for i, user_data in enumerate(sample_users):
+            user = User(
+                user_id=str(i + 1),
+                username=user_data["username"],
+                email=user_data["email"]
             )
-            # Add some sample reading history
-            self._add_sample_reading_history(user)
+            self.user_repository.users[user.user_id] = user
+    
+    def get_user_recommendations(self, user_id: str, num_recommendations: int = 10) -> List[Book]:
+        """Get personalized recommendations for a user based on their ratings"""
+        user_ratings = self.rating_repository.get_user_ratings(user_id)
+        if not user_ratings:
+            # Return popular books for new users
+            return self.get_popular_books(num_recommendations)
+        
+        # Get similar users
+        similar_users = self.rating_repository.get_similar_users(user_id)
+        if not similar_users:
+            return self.get_popular_books(num_recommendations)
+        
+        # Collect books rated highly by similar users
+        recommended_books = {}
+        user_read_books = {r.isbn for r in user_ratings}
+        
+        for similar_user_id, similarity_score in similar_users[:5]:  # Top 5 similar users
+            similar_user_ratings = self.rating_repository.get_user_ratings(similar_user_id)
+            
+            for rating in similar_user_ratings:
+                if (rating.isbn not in user_read_books and 
+                    rating.normalized_rating >= 4.0):  # Only recommend highly rated books
+                    
+                    if rating.isbn not in recommended_books:
+                        recommended_books[rating.isbn] = 0
+                    
+                    # Weight by similarity score
+                    recommended_books[rating.isbn] += similarity_score * rating.normalized_rating
+        
+        # Sort by recommendation score
+        sorted_recommendations = sorted(
+            recommended_books.items(), 
+            key=lambda x: x[1], 
+            reverse=True
+        )[:num_recommendations]
+        
+        # Get book objects
+        recommended_book_objects = []
+        for isbn, score in sorted_recommendations:
+            book = self.get_book_by_isbn(isbn)
+            if book:
+                recommended_book_objects.append(book)
+        
+        return recommended_book_objects
+    
+    def get_popular_books(self, limit: int = 20) -> List[Book]:
+        """Get popular books based on ratings"""
+        popular_isbn_list = self.rating_repository.get_popular_books(limit=limit)
+        
+        popular_books = []
+        for isbn, popularity_score, rating_count in popular_isbn_list:
+            book = self.get_book_by_isbn(isbn)
+            if book:
+                popular_books.append(book)
+        
+        return popular_books
     
     def _add_sample_reading_history(self, user: User):
         """Add sample reading history to a user"""
@@ -294,11 +469,17 @@ class DataManager:
     
     def get_user_stats(self) -> Dict[str, Any]:
         """Get overall user statistics"""
+        rating_stats = self.rating_repository.get_statistics()
+        
         stats = {
             'total_users': len(self.user_repository.users),
             'total_books': len(self.book_collection.books) if self.book_collection else 0,
             'total_genres': len(self.get_available_genres()),
-            'average_book_rating': 0.0
+            'total_ratings': rating_stats.get('total_ratings', 0),
+            'explicit_ratings': rating_stats.get('explicit_ratings', 0),
+            'average_book_rating': 0.0,
+            'average_user_rating': rating_stats.get('average_rating', 0),
+            'data_sparsity': rating_stats.get('sparsity', 0)
         }
         
         if self.book_collection:
@@ -307,6 +488,48 @@ class DataManager:
                 stats['average_book_rating'] = round(sum(ratings) / len(ratings), 2)
         
         return stats
+    
+    def get_book_recommendations_by_rating(self, isbn: str, num_recommendations: int = 5) -> List[Book]:
+        """Get recommendations based on users who rated this book highly"""
+        # Get users who rated this book highly
+        book_ratings = self.rating_repository.get_book_ratings(isbn)
+        high_rating_users = [
+            r.user_id for r in book_ratings 
+            if r.normalized_rating >= 4.0
+        ]
+        
+        if not high_rating_users:
+            return []
+        
+        # Get books that these users also rated highly
+        recommended_books = {}
+        
+        for user_id in high_rating_users[:20]:  # Limit to top 20 users
+            user_ratings = self.rating_repository.get_user_ratings(user_id)
+            
+            for rating in user_ratings:
+                if (rating.isbn != isbn and 
+                    rating.normalized_rating >= 4.0):
+                    
+                    if rating.isbn not in recommended_books:
+                        recommended_books[rating.isbn] = 0
+                    recommended_books[rating.isbn] += 1
+        
+        # Sort by frequency
+        sorted_recommendations = sorted(
+            recommended_books.items(), 
+            key=lambda x: x[1], 
+            reverse=True
+        )[:num_recommendations]
+        
+        # Get book objects
+        recommended_book_objects = []
+        for isbn, count in sorted_recommendations:
+            book = self.get_book_by_isbn(isbn)
+            if book:
+                recommended_book_objects.append(book)
+        
+        return recommended_book_objects
 
 # Global data manager instance
 data_manager = DataManager()

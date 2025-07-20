@@ -1,6 +1,7 @@
 # Models package initialization
 from .book import Book, BookRecommendation, BookCollection
 from .user import User, UserPreferences, ReadingHistory, UserRepository
+from .rating import BookRating, RatingRepository
 
 __all__ = [
     'Book',
@@ -9,5 +10,7 @@ __all__ = [
     'User',
     'UserPreferences',
     'ReadingHistory',
-    'UserRepository'
+    'UserRepository',
+    'BookRating',
+    'RatingRepository'
 ]

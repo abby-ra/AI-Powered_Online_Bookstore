@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import List, Optional, Dict
 import json
+import pandas as pd
 from datetime import datetime
 
 @dataclass
@@ -49,8 +50,10 @@ class ReadingHistory:
 class User:
     """User data model"""
     user_id: str
-    username: str
-    email: str
+    location: Optional[str] = None
+    age: Optional[int] = None
+    username: Optional[str] = None
+    email: Optional[str] = None
     preferences: Optional[UserPreferences] = None
     reading_history: Optional[List[ReadingHistory]] = None
     created_at: Optional[datetime] = None
@@ -63,12 +66,36 @@ class User:
             self.created_at = datetime.now()
         if self.last_active is None:
             self.last_active = datetime.now()
+        # Generate username from user_id if not provided
+        if self.username is None:
+            self.username = f"user_{self.user_id}"
+        # Generate email from user_id if not provided  
+        if self.email is None:
+            self.email = f"user{self.user_id}@bookstore.com"
+    
+    @classmethod
+    def from_pandas_row(cls, row: pd.Series) -> 'User':
+        """Create user object from pandas Series (from users.csv)"""
+        age = None
+        if pd.notna(row.get('Age')) and row.get('Age') != 'NULL':
+            try:
+                age = int(row.get('Age'))
+            except (ValueError, TypeError):
+                age = None
+                
+        return cls(
+            user_id=str(row.get('User-ID', '')),
+            location=str(row.get('Location', '')) if pd.notna(row.get('Location')) and row.get('Location') != 'NULL' else None,
+            age=age
+        )
     
     def to_dict(self) -> dict:
         return {
             'user_id': self.user_id,
             'username': self.username,
             'email': self.email,
+            'location': self.location,
+            'age': self.age,
             'preferences': self.preferences.to_dict() if self.preferences else None,
             'reading_history': [entry.to_dict() for entry in self.reading_history] if self.reading_history else [],
             'created_at': self.created_at.isoformat() if self.created_at else None,

@@ -10,6 +10,7 @@ import joblib
 import os
 
 from models.book import Book, BookRecommendation, BookCollection
+from models.rating import RatingRepository
 from utils.text_processing import text_processor
 
 class MLRecommendationEngine:
@@ -25,7 +26,7 @@ class MLRecommendationEngine:
         self.is_fitted = False
     
     def fit(self, book_collection: BookCollection) -> None:
-        """Fit the recommendation engine on book data"""
+        """Fit the recommendation engine on book data (backward compatibility)"""
         df = book_collection.to_dataframe()
         
         # Create text features by combining title, author, and other metadata
@@ -39,7 +40,7 @@ class MLRecommendationEngine:
         self.tfidf_vectorizer = TfidfVectorizer(
             max_features=5000,
             ngram_range=(1, 2),
-            min_df=1,
+            min_df=2,
             max_df=0.95,
             stop_words='english'
         )
@@ -51,7 +52,8 @@ class MLRecommendationEngine:
         self.similarity_matrix = cosine_similarity(self.tfidf_matrix)
         
         # Apply SVD for dimensionality reduction
-        self.svd_model = TruncatedSVD(n_components=50, random_state=42)
+        n_components = min(100, min(self.tfidf_matrix.shape) - 1)
+        self.svd_model = TruncatedSVD(n_components=n_components, random_state=42)
         self.book_features = self.svd_model.fit_transform(self.tfidf_matrix)
         
         # Perform clustering
@@ -59,6 +61,78 @@ class MLRecommendationEngine:
         
         self.books_df = df
         self.is_fitted = True
+        
+        print(f"ML engine fitted with {len(df)} books (basic mode)")
+    
+    def fit_with_ratings(self, book_collection: BookCollection, rating_repository: RatingRepository) -> None:
+        """Fit the recommendation engine on book data with rating information"""
+        df = book_collection.to_dataframe()
+        
+        # Add rating information to books
+        for idx, row in df.iterrows():
+            isbn = row['isbn']
+            avg_rating = rating_repository.get_book_average_rating(isbn)
+            rating_count = rating_repository.get_book_rating_count(isbn)
+            
+            df.at[idx, 'avg_rating'] = avg_rating if avg_rating else 0
+            df.at[idx, 'rating_count'] = rating_count
+        
+        # Create enhanced features combining text and rating information
+        df['combined_features'] = df.apply(
+            lambda row: self._create_enhanced_features(row), axis=1
+        )
+        
+        # Initialize and fit TF-IDF vectorizer
+        self.tfidf_vectorizer = TfidfVectorizer(
+            max_features=5000,
+            ngram_range=(1, 2),
+            min_df=2,
+            max_df=0.95,
+            stop_words='english'
+        )
+        
+        # Create TF-IDF matrix
+        self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(df['combined_features'])
+        
+        # Calculate similarity matrix
+        self.similarity_matrix = cosine_similarity(self.tfidf_matrix)
+        
+        # Apply SVD for dimensionality reduction
+        n_components = min(100, min(self.tfidf_matrix.shape) - 1)
+        self.svd_model = TruncatedSVD(n_components=n_components, random_state=42)
+        self.book_features = self.svd_model.fit_transform(self.tfidf_matrix)
+        
+        # Perform clustering
+        self._perform_clustering(df)
+        
+        self.books_df = df
+        self.rating_repository = rating_repository
+        self.is_fitted = True
+        
+        print(f"ML engine fitted with {len(df)} books and rating information")
+    
+    def _create_enhanced_features(self, row: pd.Series) -> str:
+        """Create enhanced feature text including rating information"""
+        # Basic text features
+        features = text_processor.create_search_terms(
+            row['title'], row['author'], row.get('genre', '')
+        )
+        
+        # Add rating-based features
+        avg_rating = row.get('avg_rating', 0)
+        rating_count = row.get('rating_count', 0)
+        
+        if avg_rating > 4:
+            features += " highly_rated excellent_book"
+        elif avg_rating > 3:
+            features += " well_rated good_book"
+        
+        if rating_count > 100:
+            features += " popular widely_read"
+        elif rating_count > 20:
+            features += " moderately_popular"
+        
+        return features
     
     def _perform_clustering(self, df: pd.DataFrame) -> None:
         """Perform clustering on book features"""
@@ -105,45 +179,83 @@ class MLRecommendationEngine:
         
         return recommendations
     
-    def get_cluster_based_recommendations(
-        self, 
-        book_title: str, 
+    def get_rating_based_recommendations(
+        self,
+        isbn: str,
         n_recommendations: int = 5
     ) -> List[BookRecommendation]:
-        """Get cluster-based recommendations"""
-        if not self.is_fitted:
-            raise ValueError("Model must be fitted before making recommendations")
-        
-        book_idx = self._find_book_index(book_title)
-        if book_idx is None:
+        """Get recommendations based on collaborative filtering using ratings"""
+        if not self.is_fitted or not hasattr(self, 'rating_repository'):
             return []
         
-        # Get the cluster of the input book
-        book_cluster = self.book_clusters[book_idx]
+        # Get books rated similarly by users who rated this book
+        book_ratings = self.rating_repository.get_book_ratings(isbn)
+        if not book_ratings:
+            return []
         
-        # Find other books in the same cluster
-        cluster_books = self.books_df[self.books_df['cluster'] == book_cluster]
+        # Get users who rated this book positively
+        positive_users = [r.user_id for r in book_ratings if r.normalized_rating >= 4.0]
         
-        # Exclude the input book itself
-        cluster_books = cluster_books[cluster_books.index != book_idx]
+        if not positive_users:
+            return []
         
-        # Get random samples from the cluster
-        if len(cluster_books) > n_recommendations:
-            cluster_books = cluster_books.sample(n_recommendations)
+        # Collect books these users also rated highly
+        recommended_books = {}
         
-        recommendations = []
-        for _, book_data in cluster_books.iterrows():
-            book = Book.from_pandas_row(book_data)
+        for user_id in positive_users[:50]:  # Limit for performance
+            user_ratings = self.rating_repository.get_user_ratings(user_id)
             
-            recommendation = BookRecommendation(
-                book=book,
-                similarity_score=0.8,  # Approximate score for cluster-based
-                recommendation_type='cluster_based',
-                reason=f"Part of similar genre/category as '{book_title}'"
-            )
-            recommendations.append(recommendation)
+            for rating in user_ratings:
+                if rating.isbn != isbn and rating.normalized_rating >= 4.0:
+                    if rating.isbn not in recommended_books:
+                        recommended_books[rating.isbn] = {'count': 0, 'total_rating': 0}
+                    
+                    recommended_books[rating.isbn]['count'] += 1
+                    recommended_books[rating.isbn]['total_rating'] += rating.normalized_rating
+        
+        # Calculate recommendation scores
+        book_scores = []
+        for book_isbn, data in recommended_books.items():
+            if data['count'] >= 2:  # At least 2 users must have rated it highly
+                avg_score = data['total_rating'] / data['count']
+                popularity_score = min(data['count'] / 10.0, 1.0)  # Normalize popularity
+                final_score = avg_score * (0.7 + 0.3 * popularity_score)
+                book_scores.append((book_isbn, final_score))
+        
+        # Sort by score
+        book_scores.sort(key=lambda x: x[1], reverse=True)
+        
+        # Create recommendations
+        recommendations = []
+        for book_isbn, score in book_scores[:n_recommendations]:
+            book_idx = self._find_book_index_by_isbn(book_isbn)
+            if book_idx is not None:
+                book_data = self.books_df.iloc[book_idx]
+                book = Book.from_pandas_row(book_data)
+                
+                recommendation = BookRecommendation(
+                    book=book,
+                    similarity_score=float(score),
+                    recommendation_type='collaborative_filtering',
+                    reason=f"Users who liked '{self._get_book_title(isbn)}' also enjoyed this book"
+                )
+                recommendations.append(recommendation)
         
         return recommendations
+    
+    def _find_book_index_by_isbn(self, isbn: str) -> Optional[int]:
+        """Find the index of a book by ISBN"""
+        matches = self.books_df[self.books_df['isbn'] == isbn]
+        if len(matches) > 0:
+            return matches.index[0]
+        return None
+    
+    def _get_book_title(self, isbn: str) -> str:
+        """Get book title by ISBN"""
+        book_idx = self._find_book_index_by_isbn(isbn)
+        if book_idx is not None:
+            return str(self.books_df.iloc[book_idx]['title'])
+        return "Unknown Book"
     
     def search_books(
         self, 
