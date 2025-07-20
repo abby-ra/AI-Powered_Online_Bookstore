@@ -1,5 +1,4 @@
 import { Link } from 'react-router-dom';
-import { MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -37,7 +36,7 @@ export default function Navbar({ categories }) {
               type="submit"
               className="bg-indigo-700 hover:bg-indigo-600 px-4 py-2 rounded-r-lg transition"
             >
-              <MagnifyingGlassIcon className="h-5 w-5" />
+              🔍
             </button>
           </form>
         </div>

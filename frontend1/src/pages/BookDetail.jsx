@@ -1,6 +1,5 @@
 import { useParams } from 'react-router-dom';
 import { useEffect, useState } from 'react';
-import { StarIcon } from '@heroicons/react/24/solid';
 
 export default function BookDetail() {
   const { isbn } = useParams();
@@ -58,7 +57,7 @@ export default function BookDetail() {
           <div className="flex items-center mb-4">
             <div className="flex">
               {[1, 2, 3, 4, 5].map((i) => (
-                <StarIcon key={i} className="h-5 w-5 text-yellow-400" />
+                <span key={i} className="text-yellow-400 text-lg">⭐</span>
               ))}
             </div>
             <span className="ml-2 text-gray-600">(4.5)</span>
