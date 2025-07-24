@@ -18,12 +18,25 @@ export default function Navbar({ categories }) {
     <header className="bg-indigo-900 text-white shadow-lg">
       <div className="container mx-auto px-4 py-4">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-6">
             <Link to="/" className="text-2xl font-bold hover:text-indigo-200 transition">
               AI Bookstore
             </Link>
+            <span
+              onClick={() => navigate('/library')}
+              className="cursor-pointer text-base font-bold px-2 py-1 rounded hover:bg-indigo-700 transition"
+              style={{letterSpacing: '0.5px'}}
+            >
+              📚 My Library
+            </span>
+            <span
+              onClick={() => navigate('/save-for-later')}
+              className="cursor-pointer text-base font-bold px-2 py-1 rounded hover:bg-orange-500 transition"
+              style={{letterSpacing: '0.5px'}}
+            >
+              💾 Save for Later
+            </span>
           </div>
-          
           <form onSubmit={handleSearch} className="mt-4 md:mt-0 md:ml-4 flex">
             <input
               type="text"
@@ -40,7 +53,6 @@ export default function Navbar({ categories }) {
             </button>
           </form>
         </div>
-        
         <nav className="mt-4 overflow-x-auto">
           <ul className="flex space-x-6 whitespace-nowrap">
             {categories.map((category) => (

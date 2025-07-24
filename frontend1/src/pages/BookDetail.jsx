@@ -1,5 +1,6 @@
 import { useParams } from 'react-router-dom';
 import { useEffect, useState } from 'react';
+import { addToLibrary, addToSaveForLater } from '../services/library';
 
 export default function BookDetail() {
   const { isbn } = useParams();
@@ -36,6 +37,22 @@ export default function BookDetail() {
     return <div className="text-center py-12">Book not found</div>;
   }
 
+  // Add feedback state
+  const [feedback, setFeedback] = useState('');
+
+  const handleAddToLibrary = async () => {
+    if (!book) return;
+    await addToLibrary(book.isbn);
+    setFeedback('Added to My Library!');
+    setTimeout(() => setFeedback(''), 1500);
+  };
+  const handleAddToSaveForLater = async () => {
+    if (!book) return;
+    await addToSaveForLater(book.isbn);
+    setFeedback('Saved for Later!');
+    setTimeout(() => setFeedback(''), 1500);
+  };
+
   return (
     <div className="max-w-6xl mx-auto">
       <div className="flex flex-col md:flex-row gap-8 mb-12">
@@ -49,11 +66,9 @@ export default function BookDetail() {
             }}
           />
         </div>
-        
         <div className="md:w-2/3">
           <h1 className="text-3xl font-bold mb-2">{book.title}</h1>
           <p className="text-xl text-gray-600 mb-4">by {book.author}</p>
-          
           <div className="flex items-center mb-4">
             <div className="flex">
               {[1, 2, 3, 4, 5].map((i) => (
@@ -62,20 +77,33 @@ export default function BookDetail() {
             </div>
             <span className="ml-2 text-gray-600">(4.5)</span>
           </div>
-          
           <div className="bg-gray-100 p-4 rounded-lg mb-6">
             <h3 className="font-bold mb-2">Details</h3>
             <p><span className="font-semibold">Publisher:</span> {book.publisher}</p>
             <p><span className="font-semibold">Year:</span> {book.year}</p>
             <p><span className="font-semibold">ISBN:</span> {book.isbn}</p>
           </div>
-          
-          <button className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg transition">
-            Add to Reading List
-          </button>
+          <div className="flex gap-4 mb-2">
+            <button
+              onClick={handleAddToLibrary}
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg transition shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              title="Add this book to your personal library"
+            >
+              <span role="img" aria-label="library">📚</span>
+              <span>Add to Library</span>
+            </button>
+            <button
+              onClick={handleAddToSaveForLater}
+              className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg transition shadow-md focus:outline-none focus:ring-2 focus:ring-orange-300"
+              title="Save this book for later"
+            >
+              <span role="img" aria-label="save for later">💾</span>
+              <span>Save for Later</span>
+            </button>
+          </div>
+          {feedback && <div className="text-green-600 font-semibold mt-2">{feedback}</div>}
         </div>
       </div>
-      
       <div className="mb-12">
         <h2 className="text-2xl font-bold mb-6">You Might Also Like</h2>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-6">
@@ -97,7 +125,6 @@ export default function BookDetail() {
           ))}
         </div>
       </div>
-      
       <div className="bg-indigo-50 p-6 rounded-lg">
         <h2 className="text-2xl font-bold mb-4">AI Recommendations</h2>
         <div className="prose max-w-none">

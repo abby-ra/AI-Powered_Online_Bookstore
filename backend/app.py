@@ -12,8 +12,36 @@ import os
 from dotenv import load_dotenv
 
 # Initialize Flask app
+
 app = Flask(__name__)
 CORS(app)
+
+# In-memory storage for demonstration (replace with DB for production)
+user_library = set()
+user_save_for_later = set()
+@app.route('/api/library', methods=['GET', 'POST'])
+def manage_library():
+    if request.method == 'POST':
+        isbn = request.json.get('isbn')
+        if not isbn:
+            return jsonify({'error': 'ISBN required'}), 400
+        user_library.add(isbn)
+        return jsonify({'message': 'Book added to library', 'isbn': isbn})
+    # GET: return books in library
+    books = books_df[books_df['isbn'].isin(user_library)].to_dict('records')
+    return jsonify(books)
+
+@app.route('/api/save_for_later', methods=['GET', 'POST'])
+def manage_save_for_later():
+    if request.method == 'POST':
+        isbn = request.json.get('isbn')
+        if not isbn:
+            return jsonify({'error': 'ISBN required'}), 400
+        user_save_for_later.add(isbn)
+        return jsonify({'message': 'Book saved for later', 'isbn': isbn})
+    # GET: return books saved for later
+    books = books_df[books_df['isbn'].isin(user_save_for_later)].to_dict('records')
+    return jsonify(books)
 
 # Load environment variables
 load_dotenv()
